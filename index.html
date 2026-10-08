@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ルビ振りアプリ</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --text:#222; --sub:#666; --line:#dde1e6;
+    --accent:#2f7d5b; --accent-weak:#e6f3ec; --rt:#c0392b;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#16181b; --card:#22252a; --text:#eee; --sub:#aaa; --line:#3a3f46;
+           --accent:#4fb487; --accent-weak:#203a2e; --rt:#ff8a7a; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:"Hiragino Kaku Gothic ProN","Yu Gothic","Meiryo",sans-serif;line-height:1.6}
+  main{max-width:920px;margin:0 auto;padding:20px 16px 60px}
+  h1{font-size:1.5rem;margin:0 0 4px}
+  .lead{color:var(--sub);margin:0 0 18px;font-size:.92rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+  .card h2{font-size:1rem;margin:0 0 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .card h2 small{font-weight:normal;color:var(--sub);font-size:.8rem}
+  textarea{width:100%;min-height:140px;padding:10px;font-size:1.05rem;font-family:inherit;
+           border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);resize:vertical}
+  .row{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;margin-top:12px}
+  label{font-size:.92rem;display:flex;align-items:center;gap:6px;cursor:pointer}
+  select{font-size:.95rem;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+  button{font-size:1rem;font-family:inherit;padding:8px 18px;border-radius:8px;border:1px solid var(--accent);
+         background:var(--accent);color:#fff;cursor:pointer}
+  button.sub{background:transparent;color:var(--accent)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  #status{font-size:.88rem;color:var(--sub)}
+  #preview{font-size:1.3rem;line-height:2.4;min-height:3em;white-space:pre-wrap;word-break:break-all}
+  #preview ruby{cursor:pointer;border-radius:4px;padding:0 1px}
+  #preview ruby:hover{background:var(--accent-weak)}
+  #preview rt{color:var(--rt);font-size:.55em}
+  #preview .plain-kanji{cursor:pointer;border-bottom:1px dashed var(--sub)}
+  #output{min-height:120px;font-size:1rem}
+  .hint{font-size:.82rem;color:var(--sub);margin:8px 0 0}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#333;color:#fff;
+         padding:8px 16px;border-radius:20px;font-size:.9rem;opacity:0;transition:opacity .2s;pointer-events:none}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<main>
+  <h1>ルビ振りアプリ</h1>
+  <p class="lead">漢字に読み仮名を自動でつけます。送り仮名は自動で分けます（例：晴れ → 晴（は）れ）。</p>
+
+  <section class="card">
+    <h2>① 文章を入力</h2>
+    <textarea id="input" placeholder="ここに文章を入力してください">今日の天気は晴れだ。</textarea>
+    <div class="row">
+      <label>出力形式
+        <select id="format">
+          <option value="zenkaku">全角かっこ　今日（きょう）</option>
+          <option value="hankaku">半角かっこ　今日(きょう)</option>
+          <option value="html">HTML　&lt;ruby&gt;今日&lt;rt&gt;きょう&lt;/rt&gt;&lt;/ruby&gt;</option>
+          <option value="aozora">青空文庫形式　｜今日《きょう》</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="firstOnly"> 同じ語は最初の1回だけ振る</label>
+    </div>
+    <div class="row">
+      <button id="convertBtn" disabled>ルビを振る</button>
+      <span id="status">辞書を読み込み中…（初回は数秒かかります）</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>② 確認・修正 <small>読みが違う語はクリックすると直せます</small></h2>
+    <div id="preview"></div>
+  </section>
+
+  <section class="card">
+    <h2>③ 結果</h2>
+    <textarea id="output" readonly></textarea>
+    <div class="row">
+      <button id="copyBtn" class="sub" disabled>コピー</button>
+    </div>
+    <p class="hint">※ 自動解析のため、人名・地名・特殊な読みは間違うことがあります。②で確認してください。</p>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js"></script>
+<script>
+// 辞書の場所。リポジトリに dict フォルダを置く場合は "./dict/" に変更
+const DIC_PATH = "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/";
+
+const KANJI = "\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆ヶ";
+const reKanji = new RegExp("[" + KANJI + "]");
+const reSplit = new RegExp("[" + KANJI + "]+|[^" + KANJI + "]+", "g");
+const reIsKanjiRun = new RegExp("^[" + KANJI + "]+$");
+
+const $ = id => document.getElementById(id);
+let tokenizer = null;
+let segments = []; // {text, ruby}  ruby が null ならルビなし
+
+// カタカナ → ひらがな
+function toHira(s){
+  return s.replace(/[\u30A1-\u30F6]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
+}
+function escRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function escHtml(s){
+  return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// 表層形と読みを突き合わせて、漢字部分にだけ読みを割り当てる
+// 例: 晴れ / はれ → [{晴,は},{れ,null}]
+function align(surface, reading){
+  const parts = surface.match(reSplit);
+  if (parts.length === 1) return [{text: surface, ruby: reading}];
+  const pattern = parts.map(p => reIsKanjiRun.test(p) ? "(.+?)" : escRe(toHira(p))).join("");
+  const m = reading.match(new RegExp("^" + pattern + "$"));
+  if (!m) return [{text: surface, ruby: reading}]; // 合わなければ語全体に振る
+  let g = 1;
+  return parts.map(p => reIsKanjiRun.test(p) ? {text: p, ruby: m[g++]} : {text: p, ruby: null});
+}
+
+// 日付の特別な読み（1日〜10日、14日、20日、24日）
+const SPECIAL_DAYS = {1:"ついたち",2:"ふつか",3:"みっか",4:"よっか",5:"いつか",6:"むいか",7:"なのか",
+  8:"ようか",9:"ここのか",10:"とおか",14:"じゅうよっか",20:"はつか",24:"にじゅうよっか"};
+const reNum = /^[0-9０-９]+$/;
+const toHalfNum = s => s.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+
+function analyze(text){
+  const result = [];
+  const tokens = tokenizer.tokenize(text);
+  for (let k = 0; k < tokens.length; k++){
+    const t = tokens[k];
+    const s = t.surface_form;
+    // 数字の直後の「月」「日」は日付として読む（10月→がつ、8日→ようか）
+    const prev = tokens[k - 1];
+    if (prev && reNum.test(prev.surface_form) && (s === "月" || s === "日")){
+      if (s === "月"){ result.push({text: s, ruby: "がつ"}); continue; }
+      const sp = SPECIAL_DAYS[+toHalfNum(prev.surface_form)];
+      if (sp){ result.pop(); result.push({text: prev.surface_form + s, ruby: sp}); }
+      else result.push({text: s, ruby: "にち"});
+      continue;
+    }
+    if (!reKanji.test(s) || !t.reading || t.reading === "*"){
+      result.push({text: s, ruby: null});
+      continue;
+    }
+    result.push(...align(s, toHira(t.reading)));
+  }
+  // 隣り合うルビなし部分を結合
+  const merged = [];
+  for (const seg of result){
+    const last = merged[merged.length - 1];
+    if (last && last.ruby === null && seg.ruby === null) last.text += seg.text;
+    else merged.push({...seg});
+  }
+  return merged;
+}
+
+// 「最初の1回だけ」を考慮して表示用のルビを決める
+function visibleSegments(){
+  const firstOnly = $("firstOnly").checked;
+  const seen = new Set();
+  return segments.map((seg, i) => {
+    if (seg.ruby === null) return {...seg, i, show: false};
+    const key = seg.text + "\u0000" + seg.ruby;
+    const show = !(firstOnly && seen.has(key));
+    seen.add(key);
+    return {...seg, i, show};
+  });
+}
+
+function formatOne(text, ruby, fmt){
+  switch (fmt){
+    case "hankaku": return `${text}(${ruby})`;
+    case "html":    return `<ruby>${escHtml(text)}<rt>${escHtml(ruby)}</rt></ruby>`;
+    case "aozora":  return `｜${text}《${ruby}》`;
+    default:        return `${text}（${ruby}）`;
+  }
+}
+
+function render(){
+  const fmt = $("format").value;
+  const vis = visibleSegments();
+
+  $("output").value = vis.map(s =>
+    s.show ? formatOne(s.text, s.ruby, fmt) : (fmt === "html" ? escHtml(s.text) : s.text)
+  ).join("");
+
+  $("preview").innerHTML = vis.map(s => {
+    if (s.show) return `<ruby data-i="${s.i}">${escHtml(s.text)}<rt>${escHtml(s.ruby)}</rt></ruby>`;
+    if (s.ruby !== null || reKanji.test(s.text)) // ルビを消した漢字・省略中の漢字も修正できるように
+      return `<span class="plain-kanji" data-i="${s.i}">${escHtml(s.text)}</span>`;
+    return escHtml(s.text);
+  }).join("");
+
+  $("copyBtn").disabled = segments.length === 0;
+}
+
+function convert(){
+  if (!tokenizer) return;
+  segments = analyze($("input").value);
+  render();
+}
+
+// プレビュー上で読みを修正
+$("preview").addEventListener("click", e => {
+  const el = e.target.closest("[data-i]");
+  if (!el) return;
+  const seg = segments[+el.dataset.i];
+  const v = prompt(`「${seg.text}」の読みを入力してください（空欄でルビを消す）`, seg.ruby ?? "");
+  if (v === null) return;
+  seg.ruby = v.trim() === "" ? null : toHira(v.trim());
+  render();
+});
+
+$("convertBtn").addEventListener("click", convert);
+$("format").addEventListener("change", render);
+$("firstOnly").addEventListener("change", render);
+$("input").addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) convert();
+});
+$("copyBtn").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("output").value); }
+  catch { $("output").select(); document.execCommand("copy"); }
+  const t = $("toast"); t.textContent = "コピーしました"; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 1500);
+});
+
+kuromoji.builder({dicPath: DIC_PATH}).build((err, tk) => {
+  if (err){
+    $("status").textContent = "辞書の読み込みに失敗しました。ネットワークを確認して再読み込みしてください。";
+    console.error(err);
+    return;
+  }
+  tokenizer = tk;
+  $("status").textContent = "準備OK（Ctrl+Enter でも変換できます）";
+  $("convertBtn").disabled = false;
+  convert();
+});
+</script>
+</body>
+</html>
