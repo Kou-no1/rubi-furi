@@ -89,6 +89,46 @@
 <script>
 // 辞書の場所。リポジトリに dict フォルダを置く場合は "./dict/" に変更
 const DIC_PATH = "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/";
+const DIC_FILES = 12; // kuromoji の辞書ファイル数
+
+// ── 辞書URLの補正と読み込み状況の表示 ──
+// kuromoji.js は辞書のURLを組み立てるとき "https://" の "//" を "/" に縮めてしまう。
+// "https:/cdn.jsdelivr.net/…" は「このサイトの中の /cdn.jsdelivr.net/…」と解釈されるため、
+// 辞書が見つからず、置き場所によっては「読み込み中」のまま止まってしまう。
+// 読みに行く直前に "https://" に戻し、ついでに何個読めたかを数える。
+let dicLoaded = 0;
+let loadDone = false;   // 準備OKになった
+let loadFailed = false; // 読み込みに失敗した
+let stallTimer = null;
+(function(){
+  const open = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url){
+    if (typeof url === "string" && url.indexOf(".dat.gz") !== -1){
+      arguments[1] = url.replace(/^(https?):\/(?!\/)/, "$1://");
+      this.addEventListener("load", () => {
+        if (this.status === 200){ dicLoaded++; showLoading(); }
+      });
+    }
+    return open.apply(this, arguments);
+  };
+})();
+
+function showLoading(){
+  if (loadDone || loadFailed) return;
+  $("status").textContent = `辞書を読み込み中…（${dicLoaded}/${DIC_FILES}）`;
+  // 30秒間1つも読めなければ、止まっていると知らせる（読み込みは続ける）
+  clearTimeout(stallTimer);
+  stallTimer = setTimeout(() => {
+    if (!loadDone && !loadFailed) showFailure("通信に時間がかかっています。", false);
+  }, 30000);
+}
+
+// hard=true: 失敗で確定 ／ hard=false: 遅いだけ（続きが届けば表示を戻す）
+function showFailure(msg, hard = true){
+  if (hard){ loadFailed = true; clearTimeout(stallTimer); }
+  $("status").innerHTML = `${escHtml(msg)} <button class="sub" id="retryBtn" type="button">もう一度読み込む</button>`;
+  $("retryBtn").addEventListener("click", () => location.reload());
+}
 
 const KANJI = "\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆ヶ";
 const reKanji = new RegExp("[" + KANJI + "]");
@@ -227,17 +267,33 @@ $("copyBtn").addEventListener("click", async () => {
   setTimeout(() => t.classList.remove("show"), 1500);
 });
 
-kuromoji.builder({dicPath: DIC_PATH}).build((err, tk) => {
-  if (err){
-    $("status").textContent = "辞書の読み込みに失敗しました。ネットワークを確認して再読み込みしてください。";
-    console.error(err);
-    return;
-  }
-  tokenizer = tk;
-  $("status").textContent = "準備OK（Ctrl+Enter でも変換できます）";
-  $("convertBtn").disabled = false;
-  convert();
+// 辞書ファイルが壊れていた・別のページが返ってきたなどで kuromoji 内部がエラーで止まった場合も、
+// 「読み込み中」のまま放置せずに知らせる
+window.addEventListener("error", e => {
+  if (loadDone) return;
+  console.error(e.error || e.message);
+  showFailure("辞書の読み込みに失敗しました。");
 });
+
+if (typeof kuromoji === "undefined"){
+  // kuromoji.js 本体が読めなかった（ネットワーク・学校のフィルタなど）
+  showFailure("ルビ振りの部品を読み込めませんでした。ネットワークを確認してください。");
+} else {
+  showLoading();
+  kuromoji.builder({dicPath: DIC_PATH}).build((err, tk) => {
+    clearTimeout(stallTimer);
+    if (err){
+      console.error(err);
+      showFailure("辞書の読み込みに失敗しました。");
+      return;
+    }
+    loadDone = true;
+    tokenizer = tk;
+    $("status").textContent = "準備OK（Ctrl+Enter でも変換できます）";
+    $("convertBtn").disabled = false;
+    convert();
+  });
+}
 </script>
 </body>
 </html>
