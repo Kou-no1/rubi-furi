@@ -76,11 +76,12 @@
 
   <section class="card">
     <h2>③ 結果</h2>
-    <textarea id="output" readonly></textarea>
+    <textarea id="output" placeholder="ここで直接書き直せます"></textarea>
     <div class="row">
       <button id="copyBtn" class="sub" disabled>コピー</button>
     </div>
     <p class="hint">※ 自動解析のため、人名・地名・特殊な読みは間違うことがあります。②で確認してください。</p>
+    <p class="hint">※ ③の結果は直接書き直せます。直した後に①〜②をやり直すと、手で直した内容は消えます（消す前に確認します）。</p>
   </section>
 </main>
 <div class="toast" id="toast"></div>
@@ -237,8 +238,22 @@ function render(){
   $("copyBtn").disabled = segments.length === 0;
 }
 
+// ③を手で直したかどうか。直した後に自動で書き換える操作をするときは確認する
+let outputEdited = false;
+$("output").addEventListener("input", () => {
+  outputEdited = true;
+  $("copyBtn").disabled = $("output").value === "";
+});
+function okToOverwrite(){
+  if (!outputEdited) return true;
+  if (!confirm("③で手で直した内容が消えて、自動の結果に戻ります。よろしいですか？")) return false;
+  outputEdited = false;
+  return true;
+}
+
 function convert(){
   if (!tokenizer) return;
+  if (!okToOverwrite()) return;
   segments = analyze($("input").value);
   render();
 }
@@ -247,6 +262,7 @@ function convert(){
 $("preview").addEventListener("click", e => {
   const el = e.target.closest("[data-i]");
   if (!el) return;
+  if (!okToOverwrite()) return;
   const seg = segments[+el.dataset.i];
   const v = prompt(`「${seg.text}」の読みを入力してください（空欄でルビを消す）`, seg.ruby ?? "");
   if (v === null) return;
@@ -255,8 +271,16 @@ $("preview").addEventListener("click", e => {
 });
 
 $("convertBtn").addEventListener("click", convert);
-$("format").addEventListener("change", render);
-$("firstOnly").addEventListener("change", render);
+let lastFormat = $("format").value;
+$("format").addEventListener("change", () => {
+  if (!okToOverwrite()){ $("format").value = lastFormat; return; }
+  lastFormat = $("format").value;
+  render();
+});
+$("firstOnly").addEventListener("change", e => {
+  if (!okToOverwrite()){ e.target.checked = !e.target.checked; return; }
+  render();
+});
 $("input").addEventListener("keydown", e => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) convert();
 });
